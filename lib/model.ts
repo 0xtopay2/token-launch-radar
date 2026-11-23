@@ -1,21 +1,31 @@
 // The token radar's model: one snapshot of the protocol universe in, one ranked board out.
 //
-// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and may add
+// The board covers every slug in the snapshot's watchlist (the floor, never a ceiling) and adds
 // pre-token protocols below the watchlist floor: the early rows the radar exists to find. A protocol is
 // pre-token when its index entry records no token (no market cap, no CoinGecko id, no symbol); the
 // snapshot's live-token protocols are kept apart and shown as the market's own values, never mixed into
 // the ranked board.
 //
-// Implied value follows only from the snapshot's own figures:
+// Calibrated Valuation Model (radar-2):
+// 1. Live Token Calibration: Computes per-category median market cap to TVL (mcap/tvl) multipliers from
+//    the snapshot's live tokens. Uses a robust global median as fallback for categories with few/no live tokens.
+// 2. Sub-linear Logarithmic TVL Scale: TVL scaling uses a power exponent (tvl_power = 0.88), ensuring a 100x TVL
+//    gap does not translate into a disproportionate 100x valuation gap.
+// 3. Tokenless-Age Premium: Protocols running longer without a token accumulate higher expected airdrop and
+//    maturity value (age_weight = 0.15 per year equivalent).
+// 4. 7d TVL Momentum: Clamped 7d change multiplier (growth_floor: -60%, growth_cap: 120%, weight: 0.4).
+// 5. Chain Breadth Multiplier: Multi-chain protocol reach adds a small premium (chain_weight = 0.05 per extra chain).
 //
-//   base       = tvl_usd x BASE_MULTIPLE
-//   growth     = clamp(change_7d, -60, 120) per cent
-//   growthMult = 1 + (growth / 100) x GROWTH_WEIGHT
-//   maturity   = 0.6 + min(age_days, 1095) / 1095 x 0.4   (age_days unknown: 365)
-//   implied    = max(1, round(base x growthMult x maturity))
-//
-// The constants are the house model's, stated in the dashboard and changeable in the model sandbox. No
-// protocol name is ever special-cased: the same function scores every row.
+// Formula:
+//   catMult       = liveTokens.median(mcap/tvl) for category (fallback: globalMedian)
+//   tvlScaled     = max(1, tvl_usd) ^ tvl_power
+//   baseVal       = tvlScaled x catMult
+//   growthPct     = clamp(change_7d, -60, 120)
+//   growthMult    = 1 + (growthPct / 100) x growth_weight
+//   age           = days from listed_at to as_of (unknown: 365 days)
+//   ageMult       = 1 + (min(max(age, 0), 1095) / 365) x age_weight
+//   chainMult     = 1 + min(chains.length - 1, 5) x chain_weight
+//   implied       = max(1, round(baseVal x growthMult x ageMult x chainMult))
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -40,34 +50,34 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-/** The model's constants, as the dashboard states them and the sandbox may change them. */
+/** The model's constants, calibrated and stated in dashboard. */
 export interface ModelConstants {
-  base_multiple: number;
   growth_weight: number;
   growth_floor: number;
   growth_cap: number;
-  maturity_floor: number;
-  maturity_range: number;
-  maturity_days: number;
+  age_weight: number;
+  chain_weight: number;
+  tvl_power: number;
+  fallback_multiple: number;
   unknown_age_days: number;
 }
 
 export const MODEL: ModelConstants = {
-  base_multiple: 0.25,
-  growth_weight: 0.5,
+  growth_weight: 0.4,
   growth_floor: -60,
   growth_cap: 120,
-  maturity_floor: 0.6,
-  maturity_range: 0.4,
-  maturity_days: 1095,
+  age_weight: 0.15,
+  chain_weight: 0.05,
+  tvl_power: 0.88,
+  fallback_multiple: 0.30,
   unknown_age_days: 365,
 };
 
-/** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-1';
+/** The model's version label: radar-2 calibrated model. */
+export const MODEL_VERSION = 'radar-2';
 
-/** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
-export const EARLY_ROWS = 160;
+/** How many pre-token protocols below the watchlist floor the early radar carries (~250-280 total rows target). */
+export const EARLY_ROWS = 240;
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -96,10 +106,11 @@ export interface BoardRow {
   age_days: number | null;
   implied_value_usd: number;
   model: {
-    base_multiple: number;
+    fallback_multiple: number;
+    category_multiple: number;
     growth_pct: number;
     growth_multiplier: number;
-    maturity_multiplier: number;
+    age_multiplier: number;
     age_days: number | null;
   };
   farm_steps: string[];
@@ -119,7 +130,7 @@ export interface RadarRow {
   age_days: number | null;
   implied_value_usd: number;
   growth_multiplier: number;
-  maturity_multiplier: number;
+  age_multiplier: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -172,17 +183,67 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The three multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
+/** Calibrate per-category median mcap/tvl multiples from live tokens in snapshot. */
+export function calibrateMultiples(protocols: SnapshotProtocol[]): { catMultiples: Map<string, number>; globalMedian: number } {
+  const catMap = new Map<string, number[]>();
+  const allRatios: number[] = [];
+
+  for (const p of protocols) {
+    if (p.mcap_usd !== null && Number.isFinite(p.mcap_usd) && p.tvl_usd > 0 && p.category) {
+      const ratio = p.mcap_usd / p.tvl_usd;
+      if (Number.isFinite(ratio) && ratio > 0) {
+        allRatios.push(ratio);
+        let list = catMap.get(p.category);
+        if (!list) {
+          list = [];
+          catMap.set(p.category, list);
+        }
+        list.push(ratio);
+      }
+    }
+  }
+
+  allRatios.sort((a, b) => a - b);
+  const globalMedian = allRatios.length > 0 ? allRatios[Math.floor(allRatios.length / 2)]! : 0.35;
+
+  const catMultiples = new Map<string, number>();
+  for (const [cat, ratios] of catMap.entries()) {
+    ratios.sort((a, b) => a - b);
+    const med = ratios[Math.floor(ratios.length / 2)]!;
+    catMultiples.set(cat, med);
+  }
+
+  return { catMultiples, globalMedian };
+}
+
+/** The calibrated implied value calculation using live comparables and deterministic adjustments. */
+export function impliedValue(
+  protocol: SnapshotProtocol,
+  asOf: string,
+  model: ModelConstants,
+  catMultiples: Map<string, number>,
+  globalMedian: number
+): { implied: number; growthPct: number; growthMult: number; ageMult: number; age: number | null; catMult: number } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+
+  const cat = protocol.category;
+  const catMult = (cat && catMultiples.get(cat)) ?? globalMedian;
+
+  // Logarithmic sub-linear TVL scale: tvl_scaled = tvl_usd ^ tvl_power
+  const tvlScaled = Math.pow(Math.max(1, protocol.tvl_usd), model.tvl_power);
+  const baseVal = tvlScaled * Math.max(0.01, catMult);
+
   const ageForModel = age ?? model.unknown_age_days;
-  const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * model.base_multiple;
-  const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
-  return { implied, growthPct, growthMult, maturityMult, age };
+  const ageMult = 1 + (Math.min(Math.max(ageForModel, 0), 1095) / 365) * model.age_weight;
+
+  const chainCount = Math.max(1, protocol.chains.length);
+  const chainMult = 1 + Math.min(chainCount - 1, 5) * model.chain_weight;
+
+  const implied = Math.max(1, Math.round(baseVal * growthMult * ageMult * chainMult));
+  return { implied, growthPct, growthMult, ageMult, age, catMult };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -203,26 +264,17 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
   return new Map(protocols.map((p) => [p.slug, p]));
 }
 
-/** The headline sentence's figures: how many watchlist slugs, how many rows, how many live protocols. */
-export interface BoardSummary {
-  watchlist_size: number;
-  board_size: number;
-  early_size: number;
-  live_size: number;
-}
-
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+  const { catMultiples, globalMedian } = calibrateMultiples(snapshot.protocols);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
-  // The watchlist is the floor: every slug, even one the snapshot no longer carries (it cannot, but the
-  // board's coverage is the gate's row and is never gambled on a missing record).
+
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: pre-token protocols below the watchlist floor, by TVL, capped. Never a replacement
-  // for a watchlist row: a chosen protocol stays chosen.
+
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
@@ -230,10 +282,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   for (const p of early) chosen.set(p.slug, p);
 
   const scored = [...chosen.values()].map((p) => {
-    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model);
-    return { p, implied, growthPct, growthMult, maturityMult, age };
+    const { implied, growthPct, growthMult, ageMult, age, catMult } = impliedValue(p, snapshot.as_of, model, catMultiples, globalMedian);
+    return { p, implied, growthPct, growthMult, ageMult, age, catMult };
   });
+
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+
   return scored.map((s, i) => ({
     rank: i + 1,
     slug: s.p.slug,
@@ -250,10 +304,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     age_days: s.age,
     implied_value_usd: s.implied,
     model: {
-      base_multiple: model.base_multiple,
+      fallback_multiple: round4(globalMedian),
+      category_multiple: round4(s.catMult),
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
-      maturity_multiplier: round4(s.maturityMult),
+      age_multiplier: round4(s.ageMult),
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
@@ -383,7 +438,7 @@ export function radarRow(row: BoardRow): RadarRow {
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
     growth_multiplier: row.model.growth_multiplier,
-    maturity_multiplier: row.model.maturity_multiplier,
+    age_multiplier: row.model.age_multiplier,
   };
 }
 
