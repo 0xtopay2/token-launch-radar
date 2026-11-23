@@ -248,11 +248,11 @@
     var pre = el('button', {type: 'button', 'aria-pressed': S.tab === 'pre-token' ? 'true' : 'false', text: 'Pre-token', onclick: function() {
         S.tab = 'pre-token';
         ren();
-      }}, 'Pre-token'),
+      }}),
       live = el('button', {type: 'button', 'aria-pressed': S.tab === 'live' ? 'true' : 'false', text: 'Live', onclick: function() {
         S.tab = 'live';
         ren();
-      }}, 'Live');
+      }});
     return el('div', {class: 'controls'},
       el('div', {class: 'field'}, el('label', {for: 'q', text: 'Search'}), q),
       el('div', {class: 'field'}, el('label', {for: 'category', text: 'Category'}), sel),
