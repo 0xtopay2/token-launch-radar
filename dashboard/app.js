@@ -97,14 +97,89 @@
     var chain = chainOf(p);
     var capital = capitalFor(p);
     var hold = holdDaysFor(p.age_days);
-    return [
-      { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
-      { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 150 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: 'Make one qualifying action each week, such as a deposit, a borrow, a swap or a vote.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
-      { text: 'Hold the position for at least ' + hold + ' days so the activity is counted in more than one snapshot.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: "Before you withdraw, open the protocol's own points or rewards page and claim only from the link it publishes.", cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-      { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
-    ].map(stepText);
+    var baseEv = Math.max(10, Math.round(p.tvl_usd * 0.0002 + (p.age_days !== null && p.age_days !== undefined ? p.age_days : 100) * 0.5));
+    var coreAction = actionFor(p, capital, chain);
+    var chainsStr = p.chains && p.chains.length > 0 ? p.chains.slice(0, 3).join(', ') : chain;
+
+    var candidates = [
+      {
+        text: 'Access ' + p.name + ' app on ' + chain + ' to execute primary position: ' + coreAction,
+        cost: '$' + capital + ' capital + $' + (capital >= 150 ? 8 : 4) + ' gas',
+        time: '15 minutes',
+        ev: baseEv * 1.5,
+        costVal: capital + (capital >= 150 ? 8 : 4),
+        timeVal: 15
+      },
+      {
+        text: 'Participate in official Galxe campaigns and Zealy community quests for ' + p.name + ' to maximize tier multiplier allocation.',
+        cost: '$2 gas fee',
+        time: '20 minutes',
+        ev: baseEv * 1.2,
+        costVal: 2,
+        timeVal: 20
+      },
+      {
+        text: 'Utilize ' + p.name + ' cross-chain bridge and liquidity router across supported networks (' + chainsStr + ').',
+        cost: '$5 bridge fee',
+        time: '15 minutes',
+        ev: baseEv * 1.1,
+        costVal: 5,
+        timeVal: 15
+      },
+      {
+        text: 'Stake LP receipt tokens or native assets into ' + p.name + ' secondary yield pools on ' + chain + ' for compounding rewards.',
+        cost: '$' + Math.round(capital * 0.5) + ' liquidity + $3 gas',
+        time: '10 minutes',
+        ev: baseEv * 1.0,
+        costVal: Math.round(capital * 0.5) + 3,
+        timeVal: 10
+      },
+      {
+        text: 'Set up a fresh non-custodial wallet dedicated exclusively to farming ' + p.name + ' with isolated offline seed storage.',
+        cost: 'under $3 gas for setup',
+        time: '5 minutes',
+        ev: baseEv * 0.8,
+        costVal: 3,
+        timeVal: 5
+      },
+      {
+        text: 'Perform routine weekly on-chain touchpoints on ' + p.name + ' (swaps, borrows, or governance votes) to maintain active user rank.',
+        cost: '$2 weekly gas',
+        time: '10 minutes',
+        ev: baseEv * 0.9,
+        costVal: 2,
+        timeVal: 10
+      },
+      {
+        text: 'Maintain active liquidity position in ' + p.name + ' for at least ' + hold + ' consecutive days across multiple reporting snapshots.',
+        cost: '$' + capital + ' position maintenance',
+        time: hold + ' days',
+        ev: baseEv * 1.3,
+        costVal: capital,
+        timeVal: hold * 24
+      },
+      {
+        text: 'Log all transactional timestamps and review official ' + p.name + ' reward claim portals only via verified links before unwinding.',
+        cost: 'zero fee (never pay to claim)',
+        time: '5 minutes',
+        ev: baseEv * 0.7,
+        costVal: 0,
+        timeVal: 5
+      }
+    ];
+
+    candidates.forEach(function(c) {
+      c.score = c.ev / (Math.max(1, c.costVal) + c.timeVal);
+    });
+
+    candidates.sort(function(a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.text < b.text ? -1 : a.text > b.text ? 1 : 0;
+    });
+
+    return candidates.slice(0, 6).map(function(s) {
+      return { text: s.text, cost: s.cost, time: s.time };
+    }).map(stepText);
   }
 
   function readHash() {
