@@ -118,45 +118,42 @@ export interface BoardRow {
 
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
 export interface RadarRow {
-  rank: number;
-  slug: string;
-  name: string;
-  category: string | null;
-  chains: string[];
-  tvl_usd: number;
-  change_7d: number | null;
-  mcap_usd: number | null;
-  listed_at: string | null;
-  age_days: number | null;
-  implied_value_usd: number;
-  growth_multiplier: number;
-  age_multiplier: number;
+  r: number;
+  s: string;
+  n: string;
+  c: string | null;
+  h: string[];
+  t: number;
+  g: number | null;
+  a: number | null;
+  i: number;
+  cm: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
 export interface LiveRow {
-  slug: string;
-  name: string;
-  category: string | null;
-  chains: string[];
-  tvl_usd: number;
-  mcap_usd: number | null;
-  change_7d: number | null;
+  s: string;
+  n: string;
+  c: string | null;
+  h: string[];
+  t: number;
+  m: number | null;
+  g: number | null;
 }
 
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
-  as_of: string;
-  source: string;
-  floor_usd: number;
-  model: ModelConstants;
-  model_version: string;
-  watchlist_size: number;
-  board_size: number;
-  early_size: number;
-  live_size: number;
-  rows: RadarRow[];
-  live: LiveRow[];
+  as: string;
+  src: string;
+  fl: number;
+  md: ModelConstants;
+  mv: string;
+  ws: number;
+  bs: number;
+  es: number;
+  ls: number;
+  rs: RadarRow[];
+  lv: LiveRow[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -472,32 +469,29 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
     .slice(0, LIVE_ROWS)
     .map((p) => ({
-      slug: p.slug,
-      name: p.name,
-      category: p.category,
-      chains: p.chains,
-      tvl_usd: p.tvl_usd,
-      mcap_usd: p.mcap_usd,
-      change_7d: p.change_7d,
+      s: p.slug,
+      n: p.name,
+      c: p.category,
+      h: p.chains,
+      t: Math.round(p.tvl_usd),
+      m: p.mcap_usd !== null ? Math.round(p.mcap_usd) : null,
+      g: p.change_7d !== null ? Math.round(p.change_7d * 10) / 10 : null,
     }));
 }
 
 /** A board row's compact form for data.js, with the farm plan generated in the page. */
 export function radarRow(row: BoardRow): RadarRow {
   return {
-    rank: row.rank,
-    slug: row.slug,
-    name: row.name,
-    category: row.category,
-    chains: row.chains,
-    tvl_usd: row.tvl_usd,
-    change_7d: row.change_7d,
-    mcap_usd: row.mcap_usd,
-    listed_at: row.listed_at,
-    age_days: row.age_days,
-    implied_value_usd: row.implied_value_usd,
-    growth_multiplier: row.model.growth_multiplier,
-    age_multiplier: row.model.age_multiplier,
+    r: row.rank,
+    s: row.slug,
+    n: row.name,
+    c: row.category,
+    h: row.chains,
+    t: Math.round(row.tvl_usd),
+    g: row.change_7d !== null ? Math.round(row.change_7d * 10) / 10 : null,
+    a: row.age_days,
+    i: row.implied_value_usd,
+    cm: row.model.category_multiple,
   };
 }
 
@@ -507,17 +501,17 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const radar: RadarData = {
-    as_of: snapshot.as_of,
-    source: snapshot.source,
-    floor_usd: snapshot.floor_usd,
-    model,
-    model_version: MODEL_VERSION,
-    watchlist_size: snapshot.watchlist.length,
-    board_size: board.length,
-    early_size: early,
-    live_size: live.length,
-    rows: board.map(radarRow),
-    live,
+    as: snapshot.as_of,
+    src: snapshot.source,
+    fl: snapshot.floor_usd,
+    md: model,
+    mv: MODEL_VERSION,
+    ws: snapshot.watchlist.length,
+    bs: board.length,
+    es: early,
+    ls: live.length,
+    rs: board.map(radarRow),
+    lv: live,
   };
   return { board, radar };
 }

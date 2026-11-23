@@ -75,6 +75,34 @@ function check() {
   }
   console.log('[PASS] All farm_steps valid (3-12 steps, 20-600 chars each)');
 
+  // 7. Dashboard + data.js total bytes < 65536
+  const dashFiles = ['dashboard/app.js', 'dashboard/app.css', 'dashboard/index.html', 'out/data.js'];
+  let totalDashBytes = 0;
+  for (const f of dashFiles) {
+    const st = fs.statSync(f);
+    totalDashBytes += st.size;
+  }
+  if (totalDashBytes >= 65536) {
+    throw new Error(`Dashboard + data.js total bytes ${totalDashBytes} is not < 65536`);
+  }
+  console.log(`[PASS] Dashboard + data.js total bytes: ${totalDashBytes} (< 65536)`);
+
+  // 8. 3 PNG screenshots exist each <= 524288 bytes and > 50KB
+  const screenshots = ['screenshots/1-board.png', 'screenshots/2-detail.png', 'screenshots/3-filtered.png'];
+  for (const s of screenshots) {
+    if (!fs.existsSync(s)) {
+      throw new Error(`Screenshot ${s} does not exist`);
+    }
+    const st = fs.statSync(s);
+    if (st.size > 524288) {
+      throw new Error(`Screenshot ${s} size ${st.size} exceeds 524288 bytes`);
+    }
+    if (st.size <= 50000) {
+      throw new Error(`Screenshot ${s} size ${st.size} is <= 50KB (renders blank)`);
+    }
+  }
+  console.log('[PASS] 3 PNG screenshots exist and each is <= 524288 bytes and > 50KB');
+
   console.log('SUCCESS: All sanity checks passed successfully!');
 }
 
